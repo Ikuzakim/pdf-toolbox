@@ -29,10 +29,15 @@ from core.usage_tracker import (
     get_remaining_operations,
 )
 
-PAYMENT_API_URL = os.getenv(
-    "PAYMENT_API_URL",
-    "http://127.0.0.1:8000",
-)
+
+try:
+    PAYMENT_API_URL = st.secrets["PAYMENT_API_URL"]
+except (KeyError, FileNotFoundError):
+    PAYMENT_API_URL = os.getenv(
+        "PAYMENT_API_URL",
+        "http://127.0.0.1:8000",
+    )
+
 def api_login(email, password):
     response = httpx.post(
         f"{PAYMENT_API_URL}/auth/login",
