@@ -6,3 +6,5 @@ data/usage.json
 .env
 .env.*
 !.env.example
+data/*.db
+payments/

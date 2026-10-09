@@ -1,93 +1,117 @@
-import json
 from datetime import datetime
-from pathlib import Path
 
+from core.auth.database import get_connection
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
-USAGE_FILE = DATA_DIR / "usage.json"
 
 FREE_OPERATION_LIMIT = 10
+PRO_OPERATION_LIMIT = 150
 
 
-def _load_usage():
-    DATA_DIR.mkdir(exist_ok=True)
-
-    if not USAGE_FILE.exists():
-        return {
-            "operations": 0,
-            "usage_month": datetime.now().strftime("%Y-%m"),
-        }
-
-    try:
-        with open(USAGE_FILE, "r", encoding="utf-8") as file:
-            return json.load(file)
-
-    except (json.JSONDecodeError, OSError):
-        return {
-            "operations": 0,
-            "usage_month": datetime.now().strftime("%Y-%m"),
-        }
+def _current_month():
+    return datetime.now().strftime("%Y-%m")
 
 
-def _save_usage(data):
-    DATA_DIR.mkdir(exist_ok=True)
+def initialize_usage(user_id):
+    month = _current_month()
 
-    with open(
-        USAGE_FILE,
-        "w",
-        encoding="utf-8",
-    ) as file:
-        json.dump(
-            data,
-            file,
-            indent=4,
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO user_usage (
+                user_id,
+                usage_month,
+                operations
+            )
+            VALUES (?, ?, 0)
+            """,
+            (user_id, month),
         )
 
 
-def get_usage():
-    data = _load_usage()
+def get_usage(user):
+    user_id = user["id"]
+    month = _current_month()
 
-    current_month = datetime.now().strftime("%Y-%m")
+    initialize_usage(user_id)
 
-    if data.get("usage_month") != current_month:
-        data = {
+    with get_connection() as connection:
+        usage = connection.execute(
+            """
+            SELECT
+                user_id,
+                usage_month,
+                operations
+            FROM user_usage
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+
+    if usage is None:
+        return {
+            "user_id": user_id,
+            "usage_month": month,
             "operations": 0,
-            "usage_month": current_month,
         }
 
-        _save_usage(data)
+    if usage["usage_month"] != month:
+        with get_connection() as connection:
+            connection.execute(
+                """
+                UPDATE user_usage
+                SET
+                    usage_month = ?,
+                    operations = 0
+                WHERE user_id = ?
+                """,
+                (month, user_id),
+            )
 
-    return data
+        return {
+            "user_id": user_id,
+            "usage_month": month,
+            "operations": 0,
+        }
+
+    return dict(usage)
 
 
-def can_use():
-    usage = get_usage()
+def get_operation_limit(user):
+    if user["plan"] == "pro":
+        return PRO_OPERATION_LIMIT
 
-    return usage["operations"] < FREE_OPERATION_LIMIT
+    return FREE_OPERATION_LIMIT
 
 
-def record_operation():
-    usage = get_usage()
+def can_use(user):
+    usage = get_usage(user)
+    limit = get_operation_limit(user)
 
-    if usage["operations"] >= FREE_OPERATION_LIMIT:
+    return usage["operations"] < limit
+
+
+def record_operation(user):
+    usage = get_usage(user)
+    limit = get_operation_limit(user)
+
+    if usage["operations"] >= limit:
         return False
 
-    usage["operations"] += 1
-
-    _save_usage(usage)
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE user_usage
+            SET operations = operations + 1
+            WHERE user_id = ?
+            """,
+            (user["id"],),
+        )
 
     return True
 
 
-def get_remaining_operations():
-    usage = get_usage()
+def get_remaining_operations(user):
+    usage = get_usage(user)
+    limit = get_operation_limit(user)
 
-    return max(
-        0,
-        FREE_OPERATION_LIMIT - usage["operations"],
-    )
-
-
-def can_process():
-    return can_use()
+    return max(0, limit - usage["operations"])
